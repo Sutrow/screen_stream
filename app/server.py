@@ -93,7 +93,7 @@ HTML = """<!DOCTYPE html>
   let lastFpsCount = 0;
 
   function connect() {
-    const ws = new WebSocket(`ws://${location.host}/ws/view`);
+    const ws = new WebSocket(`wss://${location.host}/ws/view`);
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
