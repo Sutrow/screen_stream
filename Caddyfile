@@ -1,5 +1,5 @@
 {$DOMAIN} {
-    reverse_proxy app:8080 {
+    reverse_proxy stream-server:8080 {
         header_up Host {host}
         header_up X-Real-IP {remote_host}
     }
