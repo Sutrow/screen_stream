@@ -165,8 +165,14 @@ async def ws_view(ws: WebSocket):
     viewers.add(ws)
     try:
         while True:
-            await asyncio.sleep(10)
-    except (WebSocketDisconnect, Exception):
+            message = await ws.receive()
+            if message["type"] == "websocket.disconnect":
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[{datetime.now():%H:%M:%S}] Viewer ошибка: {e}")
+    finally:
         viewers.discard(ws)
 
 
@@ -179,8 +185,13 @@ async def ws_stream(ws: WebSocket):
         while True:
             data = await ws.receive_bytes()
             await broadcast_to_viewers(data)
-    except (WebSocketDisconnect, Exception) as e:
-        print(f"[{datetime.now():%H:%M:%S}] Клиент отключился: {e}")
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[{datetime.now():%H:%M:%S}] Клиент ошибка: {e}")
+    finally:
+        print(f"[{datetime.now():%H:%M:%S}] Клиент отключился")
+
 
 
 if __name__ == "__main__":

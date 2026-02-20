@@ -46,8 +46,8 @@ async def stream():
         try:
             async with websockets.connect(
                 SERVER_URL,
-                ping_interval=20,
-                ping_timeout=10,
+                ping_interval=None,
+                ping_timeout=None,
                 max_size=None,
             ) as ws:
                 log("Подключено! Начинаю трансляцию...")
