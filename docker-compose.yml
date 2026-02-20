@@ -1,0 +1,45 @@
+services:
+  stream-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: stream-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    networks:
+      - shared-network
+
+  caddy:
+    image: caddy:2.11-alpine
+    container_name: caddy
+    restart: unless-stopped
+    profiles: ["prod"]
+    environment:
+      DOMAIN: ${CADDY_DOMAIN}
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:2019/config/ >/dev/null 2>&1" ]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - shared-network
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  shared-network:
+    driver: bridge
