@@ -298,9 +298,15 @@ HTML = """<!DOCTYPE html>
         {type:'text',text:prompt}
       ]}]})
     });
-    if(!resp.ok)throw new Error('Прокси недоступен ('+resp.status+'). Запустите gpt_proxy.py на ПК');
-    const data=await resp.json();
-    if(data.error)throw new Error(data.error.message||String(data.error));
+    const data = await resp.json().catch(()=>null);
+
+    if(!resp.ok){
+      const msg = data?.error?.message || data?.detail || ('HTTP ' + resp.status);
+      throw new Error(msg);
+    }
+    if(data?.error){
+      throw new Error(data.error.message || String(data.error));
+    }
     return data.choices[0].message.content;
   }
 
