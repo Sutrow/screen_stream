@@ -17,7 +17,8 @@ from pydantic import BaseModel
 from fastapi import Request, Response
 import httpx
 
-CHATMOCK_URL = "http://127.0.0.1:8000"
+import os
+CHATMOCK_URL = os.getenv("CHATMOCK_URL", "http://host.docker.internal:8000")
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
@@ -216,7 +217,7 @@ HTML = """<!DOCTYPE html>
   // ── Проверка прокси ──
   async function checkProxy(){
     try{
-      const r=await fetch('http://127.0.0.1:8001/health',{signal:AbortSignal.timeout(2000)});
+      const r=await fetch('/health',{signal:AbortSignal.timeout(2000)});
       proxyStatus.textContent='● gpt_proxy.py: запущен ✓';
       proxyStatus.className='proxy-status ok';
     }catch(e){
