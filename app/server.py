@@ -20,19 +20,21 @@ SERVER_PORT = 8080
 
 app = FastAPI()
 
-# Активные браузерные подключения для live-просмотра
 viewers: set[WebSocket] = set()
 
 
 async def broadcast_to_viewers(data: bytes):
-    """Рассылает кадр всем подключённым браузерам."""
-    dead = set()
-    for ws in viewers:
+    """Рассылает кадр всем зрителям параллельно с таймаутом."""
+    if not viewers:
+        return
+
+    async def send_one(ws: WebSocket):
         try:
-            await ws.send_bytes(data)
+            await asyncio.wait_for(ws.send_bytes(data), timeout=3.0)
         except Exception:
-            dead.add(ws)
-    viewers.difference_update(dead)
+            viewers.discard(ws)
+
+    await asyncio.gather(*[send_one(ws) for ws in set(viewers)])
 
 
 HTML = """<!DOCTYPE html>
@@ -93,15 +95,23 @@ HTML = """<!DOCTYPE html>
   let lastFpsCount = 0;
 
   function connect() {
-    const ws = new WebSocket(`wss://${location.host}/ws/view`);
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws/view`);
     ws.binaryType = 'arraybuffer';
+
+    // Keepalive: браузер сам шлёт ping каждые 25 сек чтобы Caddy не рвал соединение
+    let pingInterval = null;
 
     ws.onopen = () => {
       statusBadge.textContent = '● LIVE';
       statusBadge.className = 'badge live';
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+      }, 25000);
     };
 
     ws.onmessage = (e) => {
+      if (typeof e.data === 'string') return; // игнорируем текстовые keepalive
       const blob = new Blob([e.data], { type: 'image/jpeg' });
       const url = URL.createObjectURL(blob);
       img.onload = () => URL.revokeObjectURL(url);
@@ -121,6 +131,7 @@ HTML = """<!DOCTYPE html>
     };
 
     ws.onclose = () => {
+      clearInterval(pingInterval);
       statusBadge.textContent = 'Отключено';
       statusBadge.className = 'badge';
       img.style.display = 'none';
@@ -128,7 +139,7 @@ HTML = """<!DOCTYPE html>
       setTimeout(connect, 2000);
     };
   }
-  
+
   async function copyFrame() {
     const btn = document.getElementById('copy-btn');
     try {
@@ -146,6 +157,7 @@ HTML = """<!DOCTYPE html>
       setTimeout(() => btn.textContent = '📋 Копировать', 2000);
     }
   }
+
   connect();
 </script>
 </body>
@@ -165,13 +177,10 @@ async def ws_view(ws: WebSocket):
     viewers.add(ws)
     try:
         while True:
-            message = await ws.receive()
-            if message["type"] == "websocket.disconnect":
-                break
-    except WebSocketDisconnect:
+            # Читаем keepalive ping от браузера
+            await ws.receive()
+    except (WebSocketDisconnect, Exception):
         pass
-    except Exception as e:
-        print(f"[{datetime.now():%H:%M:%S}] Viewer ошибка: {e}")
     finally:
         viewers.discard(ws)
 
@@ -185,17 +194,19 @@ async def ws_stream(ws: WebSocket):
         while True:
             data = await ws.receive_bytes()
             await broadcast_to_viewers(data)
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        print(f"[{datetime.now():%H:%M:%S}] Клиент ошибка: {e}")
-    finally:
-        print(f"[{datetime.now():%H:%M:%S}] Клиент отключился")
-
+    except (WebSocketDisconnect, Exception) as e:
+        print(f"[{datetime.now():%H:%M:%S}] Клиент отключился: {e}")
 
 
 if __name__ == "__main__":
-    print("🖥  Screen Stream Server (без записи)")
+    print("🖥  Screen Stream Server")
     print(f"   Адрес: http://localhost:{SERVER_PORT}")
     print("-" * 40)
-    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="warning")
+    uvicorn.run(
+        app,
+        host=SERVER_HOST,
+        port=SERVER_PORT,
+        log_level="warning",
+        ws_ping_interval=None,  # ← отключаем ping uvicorn (Caddy мешает pong)
+        ws_ping_timeout=None,
+    )

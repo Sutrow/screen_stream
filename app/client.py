@@ -17,9 +17,9 @@ import dxcam
 import websockets
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
-SERVER_URL    = "ws://127.0.0.1:8080/ws/stream"
-CAPTURE_FPS   = 5      # кадров в секунду
-JPEG_QUALITY  = 80     # качество (0-100)
+SERVER_URL    = "wss://kege-station.store/ws/stream"
+CAPTURE_FPS   = 1      # кадров в секунду
+JPEG_QUALITY  = 100     # качество (0-100) было 80
 RECONNECT_DELAY = 3    # секунд до переподключения
 LOG_FILE      = "client.log"   # None — не писать лог
 # ───────────────────────────────────────────────────────────────────────────────
@@ -63,7 +63,19 @@ async def stream():
                         await asyncio.sleep(wait)
                     next_frame_at = time.monotonic() + FRAME_INTERVAL
 
+                    TARGET_WIDTH = 1440 #1920 на 1080
+                    TARGET_HEIGHT = 810
                     frame = camera.get_latest_frame()
+                    if frame is None:
+                        continue
+
+                    # ── Ресайз до 720p ────────────────────────────────
+                    frame = cv2.resize(
+                        frame,
+                        (TARGET_WIDTH, TARGET_HEIGHT),
+                        interpolation=cv2.INTER_LINEAR  # быстрее чем INTER_AREA, качество ок
+                    )
+
                     if frame is None:
                         continue
 
