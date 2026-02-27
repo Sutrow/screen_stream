@@ -12,6 +12,8 @@ GPT Proxy
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
+from fastapi import Request, Response
+import httpx
 
 app = Flask(__name__)
 CORS(app)
@@ -46,4 +48,4 @@ if __name__ == "__main__":
     print("🤖 GPT Proxy запущен на http://127.0.0.1:8001")
     print("   Убедитесь что ChatMock запущен: python chatmock.py serve")
     print("-" * 40)
-    app.run(host="127.0.0.1", port=8001)
+    app.run(host="0.0.0.0", port=8001)

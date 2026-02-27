@@ -14,6 +14,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from fastapi import Request, Response
+import httpx
+
+CHATMOCK_URL = "http://127.0.0.1:8000"
+
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
@@ -67,6 +72,30 @@ async def notify_overlay(req: NotifyRequest):
         asyncio.create_task(broadcast_to_overlays(req.answer))
     return JSONResponse({"ok": True})
 
+
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "ok"})
+
+@app.post("/v1/chat/completions")
+async def proxy_chat_completions(req: Request):
+    payload = await req.json()
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.post(
+                f"{CHATMOCK_URL}/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": "Bearer key"},
+            )
+        return Response(content=r.content, status_code=r.status_code, media_type="application/json")
+    except httpx.ConnectError:
+        return JSONResponse(
+            {"error": {"message": "ChatMock недоступен на сервере (127.0.0.1:8000). Запустите chatmock.py serve."}},
+            status_code=503
+        )
+    except Exception as e:
+        return JSONResponse({"error": {"message": str(e)}}, status_code=500)
 
 HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -178,7 +207,7 @@ HTML = """<!DOCTYPE html>
 </footer>
 <script>
   // gpt_proxy.py должен быть запущен на вашем ПК
-  const GPT_PROXY  = 'http://127.0.0.1:8001/v1/chat/completions';
+  const GPT_PROXY  = '/v1/chat/completions';
   const GPT_MODEL  = 'gpt-5';
 
   const imgEl=document.getElementById('screen'),placeholder=document.getElementById('placeholder'),statusBadge=document.getElementById('status'),fpsEl=document.getElementById('fps'),framesEl=document.getElementById('frames'),chatHistory=document.getElementById('chat-history'),askBtn=document.getElementById('ask-btn'),promptEl=document.getElementById('prompt'),screenPane=document.getElementById('screen-pane'),gptPane=document.getElementById('gpt-pane'),divider=document.getElementById('divider'),proxyStatus=document.getElementById('proxy-status');
