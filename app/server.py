@@ -1,9 +1,8 @@
 """
-Screen Stream Server
-====================
-Принимает кадры от клиента по WebSocket и отдаёт live-стрим в браузер.
+Screen Stream Server (удалённый сервер)
+========================================
 Запуск: python server.py
-Открыть в браузере: http://localhost:8080
+Браузер: https://kege-station.store
 """
 
 import asyncio
@@ -11,20 +10,30 @@ from datetime import datetime
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
+GPT_MODEL   = "gpt-5"
 # ───────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI()
 
-viewers: set[WebSocket] = set()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+viewers:  set[WebSocket] = set()
+overlays: set[WebSocket] = set()
 
 
 async def broadcast_to_viewers(data: bytes):
-    """Рассылает кадр всем зрителям параллельно с таймаутом."""
     if not viewers:
         return
 
@@ -37,6 +46,28 @@ async def broadcast_to_viewers(data: bytes):
     await asyncio.gather(*[send_one(ws) for ws in set(viewers)])
 
 
+async def broadcast_to_overlays(text: str):
+    dead = set()
+    for ws in overlays:
+        try:
+            await asyncio.wait_for(ws.send_text(text), timeout=3.0)
+        except Exception:
+            dead.add(ws)
+    overlays.difference_update(dead)
+
+
+class NotifyRequest(BaseModel):
+    answer: str
+
+
+@app.post("/api/notify-overlay")
+async def notify_overlay(req: NotifyRequest):
+    """Браузер присылает сюда ответ GPT → сервер рассылает всем оверлеям."""
+    if req.answer:
+        asyncio.create_task(broadcast_to_overlays(req.answer))
+    return JSONResponse({"ok": True})
+
+
 HTML = """<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -45,117 +76,234 @@ HTML = """<!DOCTYPE html>
 <title>Screen Stream</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0f0f0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; }
-  header { padding: 12px 20px; background: #1a1a1a; border-bottom: 1px solid #333; display: flex; align-items: center; gap: 16px; }
-  h1 { font-size: 16px; font-weight: 600; color: #fff; }
-  .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; background: #2a2a2a; color: #888; }
-  .badge.live { background: #ff3b3b22; color: #ff5555; animation: pulse 1.5s infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-  .info { font-size: 12px; color: #555; margin-left: auto; }
-  .screen-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: hidden; }
-  #screen { max-width: 100%; max-height: 100%; border-radius: 6px; box-shadow: 0 8px 40px #000a; display: none; }
-  .placeholder { text-align: center; color: #444; }
-  .placeholder svg { width: 64px; height: 64px; margin-bottom: 16px; }
-  .placeholder p { font-size: 14px; }
-  footer { padding: 8px 20px; background: #1a1a1a; border-top: 1px solid #222; display: flex; gap: 24px; font-size: 12px; color: #555; }
-  span#fps, span#frames { color: #888; }
+  body { background: #0a0a0a; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+  header { padding: 10px 20px; background: #141414; border-bottom: 1px solid #2a2a2a; display: flex; align-items: center; gap: 12px; flex-shrink: 0; z-index: 10; }
+  h1 { font-size: 14px; font-weight: 600; color: #fff; }
+  .badge { font-size: 11px; padding: 2px 10px; border-radius: 20px; background: #222; color: #666; }
+  .badge.live { background: #ff3b3b18; color: #ff5555; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .spacer { flex: 1; }
+  .hdr-btn { padding: 4px 12px; border-radius: 5px; border: 1px solid #333; cursor: pointer; font-size: 11px; background: #1e1e1e; color: #aaa; transition: background .15s; }
+  .hdr-btn:hover { background: #2a2a2a; color: #ddd; }
+  .main { flex: 1; display: flex; overflow: hidden; }
+  .screen-pane { display: flex; align-items: center; justify-content: center; background: #0d0d0d; overflow: hidden; position: relative; transition: flex .3s ease; flex: 1; min-width: 80px; cursor: pointer; }
+  .screen-pane img { max-width: 100%; max-height: 100%; border-radius: 4px; display: none; pointer-events: none; }
+  .placeholder { text-align: center; color: #333; pointer-events: none; user-select: none; }
+  .placeholder svg { width: 48px; height: 48px; margin-bottom: 10px; }
+  .placeholder p { font-size: 12px; }
+  .screen-pane::after { content: attr(data-hint); position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: #000a; color: #888; font-size: 11px; padding: 3px 10px; border-radius: 20px; opacity: 0; transition: opacity .2s; white-space: nowrap; pointer-events: none; }
+  .screen-pane:hover::after { opacity: 1; }
+  .divider { width: 4px; background: #1e1e1e; cursor: col-resize; flex-shrink: 0; transition: background .15s; position: relative; z-index: 5; }
+  .divider:hover, .divider.dragging { background: #3a7bd5; }
+  .divider::after { content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 2px; height: 32px; background: #444; border-radius: 2px; }
+  .gpt-pane { display: flex; flex-direction: column; background: #111; overflow: hidden; transition: flex .3s ease; flex: 1; min-width: 260px; }
+  .gpt-inner { display: flex; flex-direction: column; height: 100%; padding: 16px; gap: 10px; min-width: 260px; }
+  .gpt-title { font-size: 12px; font-weight: 600; color: #777; text-transform: uppercase; letter-spacing: .5px; flex-shrink: 0; }
+  .chat-history { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+  .chat-history::-webkit-scrollbar { width: 4px; }
+  .chat-history::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+  .msg { display: flex; flex-direction: column; gap: 4px; }
+  .msg-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: #555; }
+  .msg.user .msg-label { color: #3a7bd5; }
+  .msg.assistant .msg-label { color: #4caf7d; }
+  .msg-body { background: #1a1a1a; border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.6; color: #ccc; white-space: pre-wrap; word-break: break-word; border: 1px solid #222; }
+  .msg.user .msg-body { background: #0d1f35; border-color: #1a3a5c; }
+  .msg.assistant .msg-body { background: #0d1a12; border-color: #1a3a25; }
+  .msg.error .msg-body { background: #1a0d0d; border-color: #3a1a1a; color: #e05555; }
+  .think-block { background: #15152a; border-left: 2px solid #2a2a5a; padding: 6px 10px; margin-bottom: 6px; border-radius: 0 4px 4px 0; color: #556; font-size: 11.5px; font-style: italic; }
+  .msg.loading .msg-body { display: flex; align-items: center; gap: 6px; color: #555; font-style: italic; }
+  .dots span { display: inline-block; width: 4px; height: 4px; background: #555; border-radius: 50%; animation: dot-blink 1.2s infinite; }
+  .dots span:nth-child(2) { animation-delay: .2s; }
+  .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes dot-blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+  .input-area { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; border-top: 1px solid #1e1e1e; padding-top: 10px; }
+  .input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .input-area textarea { flex: 1; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; color: #ddd; font-size: 13px; padding: 8px 12px; resize: none; font-family: inherit; outline: none; min-height: 40px; max-height: 120px; line-height: 1.5; transition: border-color .15s; }
+  .input-area textarea:focus { border-color: #2a6496; }
+  .send-btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 15px; font-weight: 600; background: #1a4a7a; color: #7ec8f0; transition: background .15s; white-space: nowrap; flex-shrink: 0; height: 52px; }
+  .send-btn:hover { background: #1e5a9a; }
+  .send-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .quick-btn { width: 100%; padding: 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 16px; font-weight: 700; background: #1a5a2a; color: #5ddb80; transition: background .15s; }
+  .quick-btn:hover { background: #1e6e34; }
+  .quick-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .proxy-row { display: flex; align-items: center; gap: 8px; }
+  .proxy-status { font-size: 10px; color: #555; flex: 1; }
+  .proxy-status.ok { color: #4caf7d; }
+  .proxy-status.err { color: #e05555; }
+  .hint { font-size: 10px; color: #444; text-align: center; }
+  footer { padding: 6px 20px; background: #0d0d0d; border-top: 1px solid #1a1a1a; display: flex; gap: 20px; font-size: 11px; color: #444; flex-shrink: 0; }
+  footer span b { color: #666; }
 </style>
 </head>
 <body>
 <header>
   <h1>🖥 Screen Stream</h1>
   <span class="badge" id="status">Ожидание...</span>
-  <span class="info" id="resolution"></span>
-  <button id="copy-btn" onclick="copyFrame()" style="margin-left:12px; padding:4px 14px; background:#2a2a2a; color:#ccc; border:1px solid #444; border-radius:6px; cursor:pointer; font-size:12px;">📋 Копировать</button>
+  <div class="spacer"></div>
+  <button class="hdr-btn" onclick="copyFrame()">📋 Копировать кадр</button>
+  <button class="hdr-btn" onclick="toggleGPT()" id="gpt-toggle-btn">💬 Скрыть чат</button>
 </header>
-<div class="screen-wrap">
-  <img id="screen" alt="stream"/>
-  <div class="placeholder" id="placeholder">
-    <svg viewBox="0 0 24 24" fill="none" stroke="#444" stroke-width="1.5">
-      <rect x="2" y="3" width="20" height="14" rx="2"/>
-      <path d="M8 21h8M12 17v4"/>
-    </svg>
-    <p>Ожидание подключения клиента...</p>
+<div class="main" id="main">
+  <div class="screen-pane" id="screen-pane" data-hint="Нажмите чтобы развернуть" onclick="handleScreenClick(event)">
+    <img id="screen" alt="stream"/>
+    <div class="placeholder" id="placeholder">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#333" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <p>Ожидание клиента...</p>
+    </div>
+  </div>
+  <div class="divider" id="divider"></div>
+  <div class="gpt-pane" id="gpt-pane">
+    <div class="gpt-inner">
+      <div class="gpt-title">🤖 GPT — Анализ экрана</div>
+      <div class="chat-history" id="chat-history">
+        <div style="color:#333;font-size:12px;text-align:center;margin-top:20px;">Задайте вопрос — GPT проанализирует текущий кадр</div>
+      </div>
+      <div class="input-area">
+        <button class="quick-btn" id="quick-btn" onclick="quickAsk()">⚡ Какой здесь ответ</button>
+        <div class="input-row">
+          <textarea id="prompt" rows="2" onkeydown="handleKey(event)">Какой здесь ответ</textarea>
+          <button class="send-btn" id="ask-btn" onclick="askGPT()">▶ Спросить</button>
+        </div>
+        <div class="proxy-row">
+          <div class="proxy-status" id="proxy-status">● gpt_proxy.py: проверка...</div>
+        </div>
+        <div class="hint">Enter — отправить &nbsp;·&nbsp; Shift+Enter — новая строка</div>
+      </div>
+    </div>
   </div>
 </div>
 <footer>
-  <span>FPS: <span id="fps">—</span></span>
-  <span>Кадров получено: <span id="frames">0</span></span>
+  <span>FPS: <b id="fps">—</b></span>
+  <span>Кадров: <b id="frames">0</b></span>
 </footer>
-
 <script>
-  const img = document.getElementById('screen');
-  const placeholder = document.getElementById('placeholder');
-  const statusBadge = document.getElementById('status');
-  const fpsEl = document.getElementById('fps');
-  const framesEl = document.getElementById('frames');
+  // gpt_proxy.py должен быть запущен на вашем ПК
+  const GPT_PROXY  = 'http://127.0.0.1:8001/v1/chat/completions';
+  const GPT_MODEL  = 'gpt-5';
 
-  let frameCount = 0;
-  let lastFpsTime = Date.now();
-  let lastFpsCount = 0;
+  const imgEl=document.getElementById('screen'),placeholder=document.getElementById('placeholder'),statusBadge=document.getElementById('status'),fpsEl=document.getElementById('fps'),framesEl=document.getElementById('frames'),chatHistory=document.getElementById('chat-history'),askBtn=document.getElementById('ask-btn'),promptEl=document.getElementById('prompt'),screenPane=document.getElementById('screen-pane'),gptPane=document.getElementById('gpt-pane'),divider=document.getElementById('divider'),proxyStatus=document.getElementById('proxy-status');
+  let frameCount=0,lastFpsTime=Date.now(),lastFpsCount=0,screenExpanded=false,gptVisible=true,wasDragging=false,lastFrameB64=null;
 
-  function connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${proto}://${location.host}/ws/view`);
-    ws.binaryType = 'arraybuffer';
+  // ── Проверка прокси ──
+  async function checkProxy(){
+    try{
+      const r=await fetch('http://127.0.0.1:8001/health',{signal:AbortSignal.timeout(2000)});
+      proxyStatus.textContent='● gpt_proxy.py: запущен ✓';
+      proxyStatus.className='proxy-status ok';
+    }catch(e){
+      proxyStatus.textContent='● gpt_proxy.py: не запущен';
+      proxyStatus.className='proxy-status err';
+    }
+  }
+  checkProxy();
+  setInterval(checkProxy,15000);
 
-    // Keepalive: браузер сам шлёт ping каждые 25 сек чтобы Caddy не рвал соединение
-    let pingInterval = null;
-
-    ws.onopen = () => {
-      statusBadge.textContent = '● LIVE';
-      statusBadge.className = 'badge live';
-      pingInterval = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) ws.send('ping');
-      }, 25000);
+  // ── WebSocket стрим ──
+  function connect(){
+    const proto=location.protocol==='https:'?'wss':'ws';
+    const ws=new WebSocket(`${proto}://${location.host}/ws/view`);
+    ws.binaryType='arraybuffer';
+    let ping=null;
+    ws.onopen=()=>{
+      statusBadge.textContent='● LIVE';statusBadge.className='badge live';
+      ping=setInterval(()=>{if(ws.readyState===WebSocket.OPEN)ws.send('ping');},25000);
     };
-
-    ws.onmessage = (e) => {
-      if (typeof e.data === 'string') return; // игнорируем текстовые keepalive
-      const blob = new Blob([e.data], { type: 'image/jpeg' });
-      const url = URL.createObjectURL(blob);
-      img.onload = () => URL.revokeObjectURL(url);
-      img.src = url;
-      img.style.display = 'block';
-      placeholder.style.display = 'none';
-
-      frameCount++;
-      framesEl.textContent = frameCount;
-
-      const now = Date.now();
-      if (now - lastFpsTime >= 1000) {
-        fpsEl.textContent = (frameCount - lastFpsCount).toFixed(0);
-        lastFpsTime = now;
-        lastFpsCount = frameCount;
-      }
+    ws.onmessage=(e)=>{
+      if(typeof e.data==='string')return;
+      // Сохраняем кадр как base64 для GPT
+      const arr=new Uint8Array(e.data);
+      let bin='';arr.forEach(b=>bin+=String.fromCharCode(b));
+      lastFrameB64=btoa(bin);
+      const blob=new Blob([e.data],{type:'image/jpeg'});
+      const url=URL.createObjectURL(blob);
+      imgEl.onload=()=>URL.revokeObjectURL(url);
+      imgEl.src=url;imgEl.style.display='block';placeholder.style.display='none';
+      frameCount++;framesEl.textContent=frameCount;
+      const now=Date.now();if(now-lastFpsTime>=1000){fpsEl.textContent=frameCount-lastFpsCount;lastFpsTime=now;lastFpsCount=frameCount;}
     };
-
-    ws.onclose = () => {
-      clearInterval(pingInterval);
-      statusBadge.textContent = 'Отключено';
-      statusBadge.className = 'badge';
-      img.style.display = 'none';
-      placeholder.style.display = 'block';
-      setTimeout(connect, 2000);
-    };
+    ws.onclose=()=>{clearInterval(ping);statusBadge.textContent='Отключено';statusBadge.className='badge';imgEl.style.display='none';placeholder.style.display='block';setTimeout(connect,2000);};
   }
 
-  async function copyFrame() {
-    const btn = document.getElementById('copy-btn');
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      canvas.getContext('2d').drawImage(img, 0, 0);
-      canvas.toBlob(async (blob) => {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        btn.textContent = '✅ Скопировано!';
-        setTimeout(() => btn.textContent = '📋 Копировать', 2000);
-      });
-    } catch (e) {
-      btn.textContent = '❌ Ошибка';
-      setTimeout(() => btn.textContent = '📋 Копировать', 2000);
-    }
+  async function copyFrame(){
+    try{const c=document.createElement('canvas');c.width=imgEl.naturalWidth;c.height=imgEl.naturalHeight;c.getContext('2d').drawImage(imgEl,0,0);c.toBlob(async b=>{await navigator.clipboard.write([new ClipboardItem({'image/png':b})]);});}catch(e){console.error(e);}
+  }
+
+  function handleScreenClick(e){if(wasDragging)return;if(!gptVisible)return;screenExpanded=!screenExpanded;screenPane.style.flex=screenExpanded?'3':'1';gptPane.style.flex='1';screenPane.setAttribute('data-hint',screenExpanded?'Нажмите чтобы свернуть':'Нажмите чтобы развернуть');}
+
+  function toggleGPT(){gptVisible=!gptVisible;const btn=document.getElementById('gpt-toggle-btn');if(gptVisible){gptPane.style.flex='1';gptPane.style.minWidth='260px';divider.style.display='block';screenPane.style.flex=screenExpanded?'3':'1';btn.textContent='💬 Скрыть чат';screenPane.setAttribute('data-hint','Нажмите чтобы развернуть');}else{gptPane.style.flex='0';gptPane.style.minWidth='0';divider.style.display='none';screenPane.style.flex='1';screenExpanded=false;btn.textContent='💬 Показать чат';screenPane.setAttribute('data-hint','');}}
+
+  divider.addEventListener('mousedown',(e)=>{e.preventDefault();wasDragging=false;const sx=e.clientX;divider.classList.add('dragging');const tw=document.getElementById('main').offsetWidth;const onMove=(e)=>{if(Math.abs(e.clientX-sx)>3)wasDragging=true;const sw=Math.max(100,Math.min(e.clientX,tw-260));screenPane.style.flex=`0 0 ${sw}px`;gptPane.style.flex=`0 0 ${tw-sw-4}px`;};const onUp=()=>{divider.classList.remove('dragging');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);setTimeout(()=>{wasDragging=false;},50);};document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);});
+
+  function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();askGPT();}}
+
+  function setAllDisabled(v){askBtn.disabled=v;document.getElementById('quick-btn').disabled=v;promptEl.disabled=v;}
+
+  function addMessage(role,content,isLoading=false){
+    const stub=chatHistory.querySelector('div[style]');if(stub)stub.remove();
+    const msg=document.createElement('div');msg.className=`msg ${role}${isLoading?' loading':''}`;
+    const label=document.createElement('div');label.className='msg-label';label.textContent=role==='user'?'Вы':role==='assistant'?'GPT':'Ошибка';
+    const body=document.createElement('div');body.className='msg-body';
+    if(isLoading){body.innerHTML='GPT думает <span class="dots"><span></span><span></span><span></span></span>';}
+    else if(role==='assistant'){renderAnswer(body,content);}
+    else{body.textContent=content;}
+    msg.appendChild(label);msg.appendChild(body);chatHistory.appendChild(msg);chatHistory.scrollTop=chatHistory.scrollHeight;return msg;
+  }
+
+  function renderAnswer(container,text){
+    container.innerHTML='';
+    text.split(/(<think>[\s\S]*?<\/think>)/g).forEach(part=>{
+      if(part.startsWith('<think>')){const div=document.createElement('div');div.className='think-block';div.textContent='💭 '+part.replace(/<\/?think>/g,'').trim();container.appendChild(div);}
+      else if(part.trim()){const span=document.createElement('span');span.textContent=part;container.appendChild(span);}
+    });
+  }
+
+  async function callGPT(prompt){
+    if(!lastFrameB64)throw new Error('Нет кадра — дождитесь подключения клиента');
+    const resp=await fetch(GPT_PROXY,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:GPT_MODEL,messages:[{role:'user',content:[
+        {type:'image_url',image_url:{url:`data:image/jpeg;base64,${lastFrameB64}`}},
+        {type:'text',text:prompt}
+      ]}]})
+    });
+    if(!resp.ok)throw new Error('Прокси недоступен ('+resp.status+'). Запустите gpt_proxy.py на ПК');
+    const data=await resp.json();
+    if(data.error)throw new Error(data.error.message||String(data.error));
+    return data.choices[0].message.content;
+  }
+
+  async function notifyOverlay(answer){
+    const clean=answer.replace(/<think>[\s\S]*?<\/think>/g,'').trim();
+    try{await fetch('/api/notify-overlay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:clean})});}
+    catch(e){console.warn('notify-overlay error:',e);}
+  }
+
+  async function quickAsk(){
+    setAllDisabled(true);
+    addMessage('user','Какой здесь ответ');
+    const loading=addMessage('assistant','',true);
+    try{
+      const answer=await callGPT('Какой здесь ответ');
+      loading.remove();addMessage('assistant',answer);
+      notifyOverlay(answer);
+    }catch(e){loading.remove();addMessage('error',e.message);}
+    finally{setAllDisabled(false);}
+  }
+
+  async function askGPT(){
+    const prompt=promptEl.value.trim();if(!prompt)return;
+    setAllDisabled(true);
+    const savedPrompt=prompt;
+    promptEl.value='Какой здесь ответ';
+    addMessage('user',savedPrompt);
+    const loading=addMessage('assistant','',true);
+    try{
+      const answer=await callGPT(savedPrompt);
+      loading.remove();addMessage('assistant',answer);
+      notifyOverlay(answer);
+    }catch(e){loading.remove();addMessage('error',e.message);}
+    finally{setAllDisabled(false);promptEl.focus();}
   }
 
   connect();
@@ -172,12 +320,10 @@ async def index():
 
 @app.websocket("/ws/view")
 async def ws_view(ws: WebSocket):
-    """Браузер подключается сюда для просмотра стрима."""
     await ws.accept()
     viewers.add(ws)
     try:
         while True:
-            # Читаем keepalive ping от браузера
             await ws.receive()
     except (WebSocketDisconnect, Exception):
         pass
@@ -185,9 +331,24 @@ async def ws_view(ws: WebSocket):
         viewers.discard(ws)
 
 
+@app.websocket("/ws/overlay")
+async def ws_overlay(ws: WebSocket):
+    """client.py подключается сюда и получает ответы GPT для оверлея."""
+    await ws.accept()
+    overlays.add(ws)
+    print(f"[{datetime.now():%H:%M:%S}] Оверлей подключился")
+    try:
+        while True:
+            await ws.receive()
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        overlays.discard(ws)
+        print(f"[{datetime.now():%H:%M:%S}] Оверлей отключился")
+
+
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket):
-    """Клиент подключается сюда для отправки кадров."""
     await ws.accept()
     print(f"[{datetime.now():%H:%M:%S}] Клиент подключился")
     try:
@@ -207,6 +368,6 @@ if __name__ == "__main__":
         host=SERVER_HOST,
         port=SERVER_PORT,
         log_level="warning",
-        ws_ping_interval=None,  # ← отключаем ping uvicorn (Caddy мешает pong)
+        ws_ping_interval=None,
         ws_ping_timeout=None,
     )
