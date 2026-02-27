@@ -20,6 +20,7 @@ import httpx
 import os
 CHATMOCK_URL = os.getenv("CHATMOCK_URL", "http://host.docker.internal:8000")
 
+
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
