@@ -10,15 +10,16 @@ from datetime import datetime
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
+from openai import AsyncOpenAI, APIConnectionError, APIStatusError
 from pydantic import BaseModel
 
-from fastapi import Request, Response
-import httpx
-
-import os
-CHATMOCK_URL = os.getenv("CHATMOCK_URL", "http://host.docker.internal:8000")
+openai_client = AsyncOpenAI(
+    base_url="http://xray:8000/v1",
+    api_key="dummy",
+)
 
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
@@ -79,22 +80,22 @@ async def notify_overlay(req: NotifyRequest):
 async def health():
     return JSONResponse({"status": "ok"})
 
-@app.post("/v1/chat/completions")
 async def proxy_chat_completions(req: Request):
     payload = await req.json()
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.post(
-                f"{CHATMOCK_URL}/v1/chat/completions",
-                json=payload,
-                headers={"Authorization": "Bearer key"},
-            )
-        return Response(content=r.content, status_code=r.status_code, media_type="application/json")
-    except httpx.ConnectError:
+        response = await openai_client.chat.completions.create(**payload)
+        return JSONResponse(content=response.model_dump())
+
+    except APIConnectionError as e:
         return JSONResponse(
-            {"error": {"message": "ChatMock недоступен на сервере (127.0.0.1:8000). Запустите chatmock.py serve."}},
-            status_code=503
+            {"error": {"message": f"ChatMock недоступен проверьте контейнер chatmock, {e.message}."}},
+            status_code=503,
+        )
+    except APIStatusError as e:
+        return JSONResponse(
+            {"error": {"message": e.message}},
+            status_code=e.status_code,
         )
     except Exception as e:
         return JSONResponse({"error": {"message": str(e)}}, status_code=500)
