@@ -80,6 +80,7 @@ async def notify_overlay(req: NotifyRequest):
 async def health():
     return JSONResponse({"status": "ok"})
 
+@app.post("/v1/chat/completions")
 async def proxy_chat_completions(req: Request):
     payload = await req.json()
 
