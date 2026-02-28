@@ -18,8 +18,7 @@ from fastapi import Request, Response
 import httpx
 
 import os
-CHATMOCK_URL = os.getenv("CHATMOCK_URL", "http://host.docker.internal:8000")
-
+CHATMOCK_URL = os.getenv("CHATMOCK_URL", "http://172.18.0.1:8000")
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
@@ -84,20 +83,24 @@ async def proxy_chat_completions(req: Request):
     payload = await req.json()
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
             r = await client.post(
                 f"{CHATMOCK_URL}/v1/chat/completions",
                 json=payload,
                 headers={"Authorization": "Bearer key"},
             )
-        return Response(content=r.content, status_code=r.status_code, media_type="application/json")
+        return Response(content=r.content, status_code=r.status_code,
+                        media_type="application/json")
     except httpx.ConnectError:
         return JSONResponse(
-            {"error": {"message": "ChatMock недоступен на сервере (127.0.0.1:8000). Запустите chatmock.py serve."}},
+            {"error": {"message": "ChatMock недоступен (172.18.0.1:8000). Запустите chatmock.py serve."}},
             status_code=503
         )
     except Exception as e:
-        return JSONResponse({"error": {"message": str(e)}}, status_code=500)
+        return JSONResponse(
+            {"error": {"message": str(e) or e.__class__.__name__}},
+            status_code=500
+        )
 
 HTML = """<!DOCTYPE html>
 <html lang="ru">
