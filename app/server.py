@@ -15,7 +15,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from openai import AsyncOpenAI, APIConnectionError, APIStatusError
 from pydantic import BaseModel
-from fastapi import Request, Response
 
 openai_client = AsyncOpenAI(
     base_url="http://xray:8000/v1",
