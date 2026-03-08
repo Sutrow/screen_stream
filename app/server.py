@@ -15,12 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from openai import AsyncOpenAI, APIConnectionError, APIStatusError
 from pydantic import BaseModel
+from fastapi import Request, Response
 
 openai_client = AsyncOpenAI(
     base_url="http://xray:8000/v1",
     api_key="dummy",
 )
-
 
 # ── Настройки ──────────────────────────────────────────────────────────────────
 SERVER_HOST = "0.0.0.0"
@@ -99,7 +99,10 @@ async def proxy_chat_completions(req: Request):
             status_code=e.status_code,
         )
     except Exception as e:
-        return JSONResponse({"error": {"message": str(e)}}, status_code=500)
+        return JSONResponse(
+            {"error": {"message": str(e) or e.__class__.__name__}},
+            status_code=500
+        )
 
 HTML = """<!DOCTYPE html>
 <html lang="ru">
@@ -300,9 +303,15 @@ HTML = """<!DOCTYPE html>
         {type:'text',text:prompt}
       ]}]})
     });
-    if(!resp.ok)throw new Error('Прокси недоступен ('+resp.status+'). Запустите gpt_proxy.py на ПК');
-    const data=await resp.json();
-    if(data.error)throw new Error(data.error.message||String(data.error));
+    const data = await resp.json().catch(()=>null);
+
+    if(!resp.ok){
+      const msg = data?.error?.message || data?.detail || ('HTTP ' + resp.status);
+      throw new Error(msg);
+    }
+    if(data?.error){
+      throw new Error(data.error.message || String(data.error));
+    }
     return data.choices[0].message.content;
   }
 
